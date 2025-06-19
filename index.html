@@ -1,0 +1,277 @@
+ <!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Intelligent Table Generator</title>
+
+  <style>
+    /* CSS is correct and does not need changes */
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; margin: 0; background-color: #f4f7f6; color: #333; }
+    .app-header { background: linear-gradient(135deg, #4a90e2, #50e3c2); padding: 30px 20px; color: white; text-align: center; margin-bottom: 2rem; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+    h1 { margin: 0; font-size: 2.5rem; }
+    .input-wrapper { display: flex; flex-direction: column; align-items: center; gap: 15px; margin-top: 20px; }
+    .prompt-container { display: flex; justify-content: center; align-items: stretch; gap: 10px; width: 80%; max-width: 900px; }
+    textarea { width: 70%; min-height: 80px; font-size: 1rem; padding: 15px; border-radius: 8px; border: 1px solid #ccc; resize: vertical; }
+    button { padding: 10px 30px; font-size: 1.1rem; font-weight: bold; cursor: pointer; background-color: #50e3c2; color: white; border: none; border-radius: 8px; }
+    .file-input-container { background-color: rgba(255, 255, 255, 0.2); padding: 10px 20px; border-radius: 8px; width: 80%; max-width: 900px; box-sizing: border-box; }
+    .file-input-container label { font-weight: bold; margin-right: 10px; }
+    input[type="file"] { color: white; }
+    input[type="file"]::file-selector-button { border-radius: 4px; padding: 5px 10px; border: none; background-color: #f8f9fa; color: #333; cursor: pointer; }
+    .table-wrapper { margin: 20px; overflow-x: auto; background-color: white; padding: 20px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
+    h2 { text-align: center; color: #4a90e2; }
+    table { width: 100%; margin: 20px auto; border-collapse: collapse; }
+    th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
+    th { background-color: #f8f9fa; font-weight: bold; }
+    input { width: 100%; box-sizing: border-box; padding: 8px; border: 1px solid #ccc; border-radius: 4px; }
+    .hidden { display: none; }
+    .add-row-btn { display: block; margin: 20px 0 0 0; }
+    .error-message { color: #d9534f; background-color: #f2dede; padding: 15px; border-radius: 8px; margin-top: 10px; }
+  </style>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/mathjs/12.4.1/math.min.js"></script>
+</head>
+<body>
+  <header class="app-header">
+    <h1>Intelligent Table Generator</h1>
+    <div class="input-wrapper">
+      <div class="prompt-container">
+        <textarea id="prompt-input" placeholder="1. Describe the table structure here..."></textarea>
+        <button id="generate-btn">Generate Table</button>
+      </div>
+      <div class="file-input-container">
+        <label for="pdf-file-input">2. (Optional) Upload a PDF to pre-populate data:</label>
+        <input type="file" id="pdf-file-input" accept=".pdf">
+      </div>
+      <p id="loading-indicator" class="hidden">🧠 Processing...</p>
+      <p id="error-message" class="error-message hidden"></p>
+    </div>
+  </header>
+  <main id="table-container"></main>
+
+  <script>
+    'use strict';
+    document.addEventListener('DOMContentLoaded', () => {
+      const pdfFileInput = document.getElementById('pdf-file-input');
+      const promptInput = document.getElementById('prompt-input');
+      const generateBtn = document.getElementById('generate-btn');
+      const tableContainer = document.getElementById('table-container');
+      const loadingIndicator = document.getElementById('loading-indicator');
+      const errorMessage = document.getElementById('error-message');
+
+      let currentSchema = null;
+      let tableData = [{}];
+
+      generateBtn.addEventListener('click', handleGenerateTable);
+
+      async function handleGenerateTable() {
+        const prompt = promptInput.value.trim();
+        if (!prompt) { showError('Prompt cannot be empty.'); return; }
+        const pdfFile = pdfFileInput.files[0];
+        setLoading(true);
+        try {
+          const formData = new FormData();
+          formData.append('prompt', prompt);
+          if (pdfFile) { formData.append('file', pdfFile); }
+          const response = await fetch('http://localhost:8000/generate-table', { method: 'POST', body: formData });
+          if (!response.ok) {
+            const errData = await response.json();
+            throw new Error(errData.detail || `API Error: ${response.statusText}`);
+          }
+          const responseData = await response.json();
+          currentSchema = responseData.schema;
+          tableData = Array.isArray(responseData.tableData) && responseData.tableData.length > 0 ? responseData.tableData : [{}];
+          renderTable(currentSchema);
+        } catch (err) {
+          showError(err.message);
+          console.error(err);
+        } finally {
+          setLoading(false);
+        }
+      }
+
+      function renderTable(schema) {
+        tableContainer.innerHTML = '';
+        const tableWrapper = document.createElement('div');
+        tableWrapper.className = 'table-wrapper';
+        const tableName = document.createElement('h2');
+        tableName.textContent = schema.tableName || 'Generated Table';
+        tableWrapper.appendChild(tableName);
+        const table = document.createElement('table');
+        const thead = document.createElement('thead');
+        const tbody = document.createElement('tbody');
+        tbody.id = 'table-body';
+        const headerRow = document.createElement('tr');
+        schema.columns.forEach(col => {
+          const th = document.createElement('th');
+          th.textContent = col.header;
+          headerRow.appendChild(th);
+        });
+        thead.appendChild(headerRow);
+        table.append(thead, tbody);
+        tableWrapper.appendChild(table);
+        const addRowBtn = document.createElement('button');
+        addRowBtn.textContent = '+ Add Row';
+        addRowBtn.className = 'add-row-btn';
+        addRowBtn.addEventListener('click', addRow);
+        tableWrapper.appendChild(addRowBtn);
+        tableContainer.appendChild(tableWrapper);
+        renderTableBody();
+      }
+      
+      function renderTableBody() {
+        const tbody = document.getElementById('table-body');
+        if (!tbody || !currentSchema) return;
+        tbody.innerHTML = '';
+
+        tableData.forEach((rowData, rowIndex) => {
+          const tr = document.createElement('tr');
+          const primaryKeyCol = currentSchema.columns.find(c => c.isPrimaryKey);
+          const primaryKeyId = primaryKeyCol ? primaryKeyCol.id : null;
+          
+          currentSchema.columns.forEach(col => {
+            const td = document.createElement('td');
+            const cellValue = rowData[col.id] || '';
+            
+            // A cell is considered editable if the schema says so explicitly,
+            // OR if it's a new row that hasn't been populated from a PDF.
+            // We check if the primary key for that row exists in our data.
+            const isManuallyAddedRow = !rowData[primaryKeyId];
+            const isCellEditable = col.isEditable || isManuallyAddedRow;
+
+            if (isCellEditable) {
+              td.appendChild(createCellInput(col, rowIndex));
+            } else {
+              // This handles pre-populated, non-editable text AND calculated fields
+              if (col.formula) {
+                const calculatedValue = calculateFormula(rowData, col.formula);
+                td.textContent = (calculatedValue === null || isNaN(calculatedValue)) ? '0' : calculatedValue;
+                td.dataset.colId = col.id;
+              } else {
+                td.textContent = cellValue;
+              }
+            }
+            tr.appendChild(td);
+          });
+          tbody.appendChild(tr);
+        });
+      }
+
+      function createCellInput(col, rowIndex) {
+        const value = tableData[rowIndex][col.id] || '';
+        let input;
+        switch (col.type) {
+          case 'number':
+            input = document.createElement('input');
+            input.type = 'number';
+            input.value = value;
+            if (col.maxValue !== undefined) {
+              input.max = col.maxValue;
+              input.min = 0;
+            }
+            break;
+          case 'boolean':
+            input = document.createElement('input');
+            input.type = 'checkbox';
+            input.checked = !!value;
+            break;
+          case 'date':
+            input = document.createElement('input');
+            input.type = 'date';
+            input.value = value;
+            break;
+          default: // 'text'
+            input = document.createElement('input');
+            input.type = 'text';
+            input.value = value;
+        }
+        input.dataset.rowIndex = rowIndex;
+        input.dataset.colId = col.id;
+        input.addEventListener('input', handleCellChange);
+        return input;
+      }
+
+      // ==========================================================
+      //           THE DEFINITIVELY CORRECTED FUNCTION
+      // ==========================================================
+      function handleCellChange(event) {
+        const input = event.target;
+        const rowIndex = parseInt(input.dataset.rowIndex, 10);
+        const colId = input.dataset.colId;
+        
+        // --- THIS IS THE CORRECTED LINE ---
+        // It correctly gets the `.value` for text/number inputs
+        // and `.checked` only for checkboxes.
+        let value = input.type === 'checkbox' ? input.checked : input.value;
+
+        // The validation logic for max value remains correct.
+        if (input.type === 'number' && input.max !== '') {
+          const maxValue = parseFloat(input.max);
+          let numericValue = parseFloat(value);
+          if (numericValue > maxValue) {
+            numericValue = maxValue;
+            input.value = maxValue;
+            value = maxValue.toString();
+          }
+        }
+        
+        tableData[rowIndex][colId] = value;
+        updateCalculatedCells(rowIndex);
+      }
+      // ==========================================================
+      //                     END OF FIX
+      // ==========================================================
+
+      function updateCalculatedCells(rowIndex) {
+        const rowElement = document.getElementById('table-body').rows[rowIndex];
+        if (!rowElement) return;
+        const rowData = tableData[rowIndex];
+        currentSchema.columns.forEach(col => {
+          if (!col.isEditable && col.formula) {
+            const cell = rowElement.querySelector(`td[data-col-id="${col.id}"]`);
+            if (cell) {
+              const calculatedValue = calculateFormula(rowData, col.formula);
+              cell.textContent = (calculatedValue === null || isNaN(calculatedValue)) ? '0' : calculatedValue;
+            }
+          }
+        });
+      }
+
+      function calculateFormula(rowData, formula) {
+        if (!formula || !currentSchema) return null;
+        try {
+          const scope = {};
+          currentSchema.columns.forEach(col => {
+            const value = rowData[col.id];
+            scope[col.id] = parseFloat(value) || 0;
+          });
+          const sanitizedFormula = formula.replace(/SUM\((.*?)\)/g, '($1)');
+          return math.evaluate(sanitizedFormula, scope);
+        } catch (e) {
+          console.error('Formula Error:', e);
+          return null;
+        }
+      }
+
+      function addRow() {
+        tableData.push({});
+        renderTableBody();
+      }
+
+      function setLoading(isLoading) {
+        generateBtn.disabled = isLoading;
+        loadingIndicator.classList.toggle('hidden', !isLoading);
+        if (isLoading) {
+          errorMessage.classList.add('hidden');
+          tableContainer.innerHTML = '';
+        }
+      }
+
+      function showError(message) {
+        errorMessage.textContent = `Error: ${message}`;
+        errorMessage.classList.remove('hidden');
+      }
+    });
+  </script>
+</body>
+</html>
